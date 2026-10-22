@@ -1,4 +1,4 @@
-# CloudFormation S3 Template Repository
+# AWS Networking Lab 06: VPC Interface Endpoint for SQS
 
 <!-- Row 1: Status - Most Important -->
 [![Release](https://img.shields.io/github/v/release/subhamay-bhattacharyya/aws-lab06-vpc-interface-endpoint-sqs?label=Release)](https://github.com/subhamay-bhattacharyya/aws-lab06-vpc-interface-endpoint-sqs/releases)&nbsp;[![Release Workflow](https://github.com/subhamay-bhattacharyya/aws-lab06-vpc-interface-endpoint-sqs/actions/workflows/ci.yaml/badge.svg)](https://github.com/subhamay-bhattacharyya/aws-lab06-vpc-interface-endpoint-sqs/actions/workflows/ci.yaml)&nbsp;[![Issues](https://img.shields.io/github/issues/subhamay-bhattacharyya/aws-lab06-vpc-interface-endpoint-sqs)](https://github.com/subhamay-bhattacharyya/aws-lab06-vpc-interface-endpoint-sqs/issues)&nbsp;[![Last Commit](https://img.shields.io/github/last-commit/subhamay-bhattacharyya/aws-lab06-vpc-interface-endpoint-sqs)](https://github.com/subhamay-bhattacharyya/aws-lab06-vpc-interface-endpoint-sqs/commits)

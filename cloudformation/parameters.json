@@ -1,5 +1,12 @@
 {
   "Environment": "devl",
-  "ProjectName": "cfn-nstd",
+  "Project": "netwk-lab06",
+  "VpcCidr": "10.17.0.0/16",
+  "PublicCidr": "10.17.0.0/20",
+  "PrivateCidr": "10.17.48.0/20",
+  "AmiParam": "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2",
+  "InstanceType": "t2.micro",
+  "KeyPairName": "networking-lab",
+  "KmsKey": "SB-KMS",
   "CiSuffix": ""
 }

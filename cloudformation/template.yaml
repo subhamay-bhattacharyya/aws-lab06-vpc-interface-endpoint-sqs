@@ -1,50 +1,82 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
-Description: 'Root CloudFormation template that invokes a nested S3 bucket stack'
+Description: |
+  Root CloudFormation template for AWS Networking Lab 6. Creates:
+  - VPC with Internet Gateway
+  - Public and private subnets
+  - Public SSH-only security group (open to 0.0.0.0/0)
+  - Private security group (SSH from the public security group)
+  - SQS queue
+  - Public and private EC2 instances
 
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: "Nested Stack Configuration"
-        Parameters:
-          - NestedStacksS3BucketName
-      - Label:
-          default: "Common Bucket Configuration"
+          default: "Project Configuration"
         Parameters:
           - ProjectName
           - Environment
       - Label:
-          default: "Bucket Configuration"
+          default: "Nested Stack Configuration"
         Parameters:
-          - BucketBaseName
+          - TemplateBucket
       - Label:
-          default: "Encryption Configuration"
+          default: "VPC Configuration"
         Parameters:
+          - VpcCidr
+          - PublicCidr
+          - PrivateCidr
+      - Label:
+          default: "Security Group Configuration"
+        Parameters:
+          - PublicEc2SgName
+          - PrivateEc2SgName
+      - Label:
+          default: "EC2 Instance Configuration"
+        Parameters:
+          - AmiParam
+          - InstanceType
+          - KeyPairName     
+      - Label:
+          default: "SQS Queue Configuration"
+        Parameters:
+          - QueueBaseName
           - KmsKey
-          - EnableBucketKey
       - Label:
           default: "Advanced Configuration"
         Parameters:
           - CiSuffix
     ParameterLabels:
-      NestedStacksS3BucketName:
+      TemplateBucket:
         default: "S3 Bucket Name"
       ProjectName:
         default: "Project Name"
-      BucketBaseName:
-        default: "Bucket Base Name"
       Environment:
         default: "Environment"
+      VpcCidr:
+        default: "VPC CIDR block (e.g., 10.0.0.0/16)"
+      PublicCidr:
+        default: "Public Subnet CIDR blocks (comma-separated, e.g., 10.10.0.0/20)"
+      PrivateCidr:
+        default: "Private Subnet CIDR blocks (comma-separated, e.g., 10.10.0.0/20)"
+      PublicEc2SgName:
+        default: "SSH Only Security Group Public Subnet Base Name"
+      PrivateEc2SgName:
+        default: "SSH Only Security Group Private Subnet Base Name"
+      AmiParam:
+        default: "EC2 Image (AMI) SSM Parameter"
+      InstanceType:
+        default: "EC2 Instance Type"
+      KeyPairName:
+        default: "EC2 Key Pair Name (for SSH)"
       CiSuffix:
-        default: "CI Suffix"
+        default: "CI CiSuffix"
       KmsKey:
-        default: "KMS Key (ARN / Alias)"
-      EnableBucketKey:
-        default: "Enable S3 Bucket Key"
+        default: "KMS Key for SQS Queue"
 
 Parameters:
-  NestedStacksS3BucketName:
+  TemplateBucket:
     Type: String
     Default: "subhamay-cfn-templates-bucket-270453428528-us-east-1"
     Description: "S3 bucket name where the nested CloudFormation template is stored"
@@ -55,83 +87,391 @@ Parameters:
 
   ProjectName:
     Type: String
-    Default: "ztc-etl"
+    Default: "netwk-lab06"
     Description: "Project name to use as a bucket prefix"
     MinLength: 1
     MaxLength: 20
     AllowedPattern: "^[a-z0-9-]+$"
     ConstraintDescription: "Project name must be lowercase letters, numbers, and hyphens only"
 
-  BucketBaseName:
-    Type: String
-    Default: "csv-raw-data"
-    MinLength: 1
-    MaxLength: 20
-    AllowedPattern: "^[a-z0-9.-]+$"
-    ConstraintDescription: "Bucket base name must be 1-20 characters and can only contain lowercase letters, numbers, hyphens, and dots"
-    Description: Base name for the S3 bucket (account ID, environment, and region will be appended)
-
-  KmsKey:
-    Type: String
-    Default: ""
-    AllowedPattern: "^(alias/[a-zA-Z0-9_-]+|arn:aws:kms:[a-z0-9-]+:[0-9]+:key/[a-zA-Z0-9-]+|[a-zA-Z0-9_-]+)?$"
-    ConstraintDescription: "KMS Key can be a key name (e.g., my-key, auto-converted to alias/my-key), a KMS key alias (e.g., alias/my-key), or a full KMS key ARN (e.g., arn:aws:kms:region:account:key/key-id), or leave empty for no KMS encryption"
-    Description: "Optional KMS Key for S3 bucket encryption. Accepts: key name (my-key), alias (alias/my-key), or ARN (arn:aws:kms:region:account:key/key-id). Plain key names are auto-converted to aliases."
-
-  EnableBucketKey:
-    Type: String
-    Default: "false"
-    AllowedValues:
-      - "true"
-      - "false"
-    Description: "Enable S3 Bucket Key for KMS encryption cost optimization (only applicable when KmsKey is provided)"
-
   Environment:
     Type: String
     Default: devl
-    Description: "Deployment environment for the S3 bucket"
+    Description: "Deployment environment"
+    AllowedValues:
+      - devl
+      - stag
+      - prod
+    ConstraintDescription: "Environment must be one of: devl, stag, prod"
+
+  VpcCidr:
+    Type: String
+    Default: "10.17.0.0/16"
+    Description: CIDR block for the VPC (e.g., 10.0.0.0/16)
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}$'
+    ConstraintDescription: Must be valid CIDR block
+
+  PublicCidr:
+    Type: String
+    Default: "10.17.0.0/20"
+    Description: "Comma-separated list of public subnet CIDR blocks (e.g., 10.10.0.0/20)"
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}(,\s*(\d{1,3}\.){3}\d{1,3}/\d{1,2})*$'
+    ConstraintDescription: "Must be valid CIDR blocks, comma-separated"
+
+  PrivateCidr:
+    Type: String
+    Default: "10.17.48.0/20"
+    Description: "Comma-separated list of private subnet CIDR blocks (e.g., 10.10.16.0/20)"
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/\d{1,2}(,\s*(\d{1,3}\.){3}\d{1,3}/\d{1,2})*$'
+    ConstraintDescription: "Must be valid CIDR blocks, comma-separated"
 
   CiSuffix:
     Type: String
     Default: ""
-    Description: "Optional CI suffix to append to the bucket name"
+    Description: "CI suffix to append to resource names"
+    MinLength: 0
+    MaxLength: 10
+    AllowedPattern: "^[a-z0-9-]*$"
+    ConstraintDescription: "CI suffix must be lowercase letters, numbers, and hyphens only"
+
+  PublicEc2SgName:
+    Type: String
+    Default: "ssh-public-sg"
+    Description: "Base name for the SSH security group in the public subnet, combined with the project and environment names"
+    MinLength: 1
+    MaxLength: 30
+    AllowedPattern: "^[a-z0-9-]+$"
+    ConstraintDescription: "Security group base name must be lowercase letters, numbers, and hyphens only"
+
+  PrivateEc2SgName:
+    Type: String
+    Default: "ssh-server-sg"
+    Description: "Base name for the SSH server security group in the private subnet, combined with the project and environment names"
+    MinLength: 1
+    MaxLength: 30
+    AllowedPattern: "^[a-z0-9-]+$"
+    ConstraintDescription: "Security group base name must be lowercase letters, numbers, and hyphens only"
+
+  QueueBaseName:
+    Type: String
+    Default: "sqs-queue"
+    MinLength: 1
+    MaxLength: 20
+    AllowedPattern: "^[a-z0-9-]+$"
+    ConstraintDescription: "Queue base name must be 1-20 characters and can only contain lowercase letters, numbers, and hyphens"
+    Description: Base name for the SQS queue (project name, environment, and region will be appended)
+
+  KmsKey:
+    Type: String
+    Default: "SB-KMS"
+    Description: "KMS key used to encrypt the SQS queue"
+
+  AmiParam:
+    Type: String
+    Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+    Description: "SSM parameter that resolves to the EC2 image (AMI) ID for the instance. The default resolves to the latest Amazon Linux 2023 x86_64 AMI in the deployment region"
+
+  InstanceType:
+    Type: String
+    Default: "t3.micro"
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t2.micro
+    Description: "EC2 instance type"
+    ConstraintDescription: "Must be one of the allowed instance types"
+
+  KeyPairName:
+    Type: String
+    Default: "networking-lab"
+    Description: "Name of an existing EC2 key pair to use for SSH access. The console lists the key pairs available in this account and region"
+    ConstraintDescription: "Must be the name of an existing EC2 key pair in this account and region"
+
+
+Conditions:
+  HasSuffix: !Not [!Equals [!Ref CiSuffix, ""]]
 
 Resources:
-  S3BucketNestedStack:
+
+  # VPC and Internet Gateway
+  Vpc:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucket}.s3.us-east-1.amazonaws.com/cfn-nested-aws-vpc/template.yaml"
+      Parameters:
+          VPCCidrBlock: !Ref VpcCidr
+          EnableDnsHostnames: "true"
+          EnableInternetGateway: "true"
+          VpcNameTag: !If
+            - HasSuffix
+            - !Sub "${ProjectName}-${Environment}-${AWS::Region}-${CiSuffix}"
+            - !Sub "${ProjectName}-${Environment}-${AWS::Region}"
+          Environment: !Ref Environment
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Implement Interface Endpoint for SQS"
+        - Key: Component
+          Value: Vpc
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  # Public subnet with a default route to the Internet Gateway
+  PublicSubnet:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucket}.s3.us-east-1.amazonaws.com/cfn-nested-aws-subnets/template.yaml"
+      Parameters:
+        VpcId: !GetAtt Vpc.Outputs.VPCId
+        VpcName: !If
+          - HasSuffix
+          - !Sub "${ProjectName}-${Environment}-${CiSuffix}"
+          - !Sub "${ProjectName}-${Environment}"
+        AvailabilityZones: "us-east-1a"
+        SubnetCidrBlocks: !Ref PublicCidr
+        SubnetCount: "1"
+        SubnetQualifier: "public"
+        InternetGatewayId: !GetAtt Vpc.Outputs.InternetGatewayId
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Implement Interface Endpoint for SQS"
+        - Key: Component
+          Value: PublicSubnet
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  # Private subnet. No Internet Gateway is passed, so the subnet has no default route
+  PrivateSubnet:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucket}.s3.us-east-1.amazonaws.com/cfn-nested-aws-subnets/template.yaml"
+      Parameters:
+        VpcId: !GetAtt Vpc.Outputs.VPCId
+        VpcName: !If
+          - HasSuffix
+          - !Sub "${ProjectName}-${Environment}-${CiSuffix}"
+          - !Sub "${ProjectName}-${Environment}"
+        AvailabilityZones: "us-east-1a"
+        SubnetCidrBlocks: !Ref PrivateCidr
+        SubnetCount: "1"
+        SubnetQualifier: "private"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Implement Interface Endpoint for SQS"
+        - Key: Component
+          Value: PrivateSubnet
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  # SSH-only security group, open to 0.0.0.0/0
+  PublicEc2Sg:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucket}.s3.us-east-1.amazonaws.com/cfn-nested-aws-ec2-security-group/template.yaml"
+      Parameters:
+        VpcId: !GetAtt Vpc.Outputs.VPCId
+        ProjectName: !Ref ProjectName
+        SecurityGroupBaseName: !Ref PublicEc2SgName
+        SecurityGroupDescription: "Security group for SSH-only access"
+        CiSuffix: !Ref CiSuffix
+        Rule1RuleSet: "SSHOnly"
+        Rule1SourceCidr: "0.0.0.0/0"
+        Rule2RuleSet: "None"
+        Rule3RuleSet: "None"
+        Rule4RuleSet: "None"
+        Rule5RuleSet: "None"
+        Environment: !Ref Environment
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Implement Interface Endpoint for SQS"
+        - Key: Component
+          Value: PublicEc2Sg
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  # Web server security group. No CIDR rules; HTTP comes only from the PublicEc2Sg security group
+  PrivateEc2Sg:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucket}.s3.us-east-1.amazonaws.com/cfn-nested-aws-ec2-security-group/template.yaml"
+      Parameters:
+        VpcId: !GetAtt Vpc.Outputs.VPCId
+        ProjectName: !Ref ProjectName
+        SecurityGroupBaseName: !Ref PrivateEc2SgName
+        SecurityGroupDescription: "Security group for web server HTTP access from the load balancer"
+        CiSuffix: !Ref CiSuffix
+        Rule1SourceSecurityGroupId: !GetAtt PublicEc2Sg.Outputs.SecurityGroupId
+        Rule1RuleSet: "SSHOnly"
+        Rule2RuleSet: "None"
+        Rule3RuleSet: "None"
+        Rule4RuleSet: "None"
+        Rule5RuleSet: "None"
+        Environment: !Ref Environment
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Implement Interface Endpoint for SQS"
+        - Key: Component
+          Value: PrivateEc2Sg
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  SQSQueue:
     Type: AWS::CloudFormation::Stack
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
     Metadata:
       com.aws.cloudformation.Context:
-        why: "Invokes the nested S3 bucket CloudFormation template to create a versioned, encrypted S3 bucket with public access blocking and optional logging/website configuration"
+        why: "Invokes the nested SQS queue CloudFormation template to create an SQS queue with a queue policy for same-account and optional cross-account access"
         must:
           - "Nested template must be accessible at the specified S3 location"
           - "IAM principal must have s3:GetObject permission on the template S3 bucket"
-          - "CloudFormation service must have permission to assume the required IAM role for S3 and KMS operations"
+          - "CloudFormation service must have permission to create SQS queues and queue policies"
     Properties:
-      TemplateURL: !Sub https://${NestedStacksS3BucketName}.s3.us-east-1.amazonaws.com/cfn-nested-aws-s3-bucket/template.yaml
+      TemplateURL: !Sub "https://${TemplateBucket}.s3.us-east-1.amazonaws.com/cfn-nested-aws-sqs-queue/template.yaml"
       Parameters:
         ProjectName: !Ref ProjectName
-        BucketBaseName: !Ref BucketBaseName
+        QueueBaseName: !Ref QueueBaseName
         KmsKey: !Ref KmsKey
-        EnableBucketKey: !Ref EnableBucketKey
         Environment: !Ref Environment
         CiSuffix: !Ref CiSuffix
       Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Implement Interface Endpoint for SQS"
+        - Key: Component
+          Value: SQSQueue
         - Key: ManagedBy
           Value: RootStack
-        - Key: NestedStackPurpose
-          Value: S3BucketCreation
+
+
+  # EC2 instance in the private subnet, with the private security group and key pair
+  PublicEc2:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucket}.s3.us-east-1.amazonaws.com/cfn-nested-aws-ec2-instance/template.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        InstanceBaseName: "public-ec2"
+        Environment: !Ref Environment
+        CiSuffix: !Ref CiSuffix
+        ImageId: !Ref AmiParam
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyPairName
+        SubnetId: !GetAtt PublicSubnet.Outputs.SubnetId1
+        SecurityGroupIds: !GetAtt PublicEc2Sg.Outputs.SecurityGroupId
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Implement Interface Endpoint for SQS"
+        - Key: Component
+          Value: PublicEc2
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
+
+  # EC2 instance in the private subnet, with the private security group and key pair
+  PrivateEc2:
+    Type: AWS::CloudFormation::Stack
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TemplateURL: !Sub "https://${TemplateBucket}.s3.us-east-1.amazonaws.com/cfn-nested-aws-ec2-instance/template.yaml"
+      Parameters:
+        ProjectName: !Ref ProjectName
+        InstanceBaseName: "private-ec2"
+        Environment: !Ref Environment
+        CiSuffix: !Ref CiSuffix
+        ImageId: !Ref AmiParam
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyPairName
+        SubnetId: !GetAtt PrivateSubnet.Outputs.SubnetId1
+        SecurityGroupIds: !GetAtt PrivateEc2Sg.Outputs.SecurityGroupId
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: "Implement Interface Endpoint for SQS"
+        - Key: Component
+          Value: PrivateEc2
+        - Key: ManagedBy
+          Value: RootStack
+      TimeoutInMinutes: 10
 
 Outputs:
-  NestedStackId:
-    Description: "ID of the nested stack"
-    Value: !Ref S3BucketNestedStack
 
-  S3BucketName:
-    Description: "Name of the S3 bucket created by the nested stack"
-    Value: !GetAtt S3BucketNestedStack.Outputs.S3BucketName
+  VpcId:
+    Description: "ID of the VPC created by the nested stack"
+    Value: !GetAtt Vpc.Outputs.VPCId
 
-  S3BucketArn:
-    Description: "ARN of the S3 bucket created by the nested stack"
-    Value: !GetAtt S3BucketNestedStack.Outputs.S3BucketArn
+  IgwId:
+    Description: "ID of the Internet Gateway attached to the VPC created by the nested stack"
+    Value: !GetAtt Vpc.Outputs.InternetGatewayId
+
+  PublicSubnet1Id:
+    Description: "ID of the public subnet created by the nested subnets stack"
+    Value: !GetAtt PublicSubnet.Outputs.SubnetId1
+
+  PrivateSubnetId:
+    Description: "ID of the private subnet created by the nested subnets stack"
+    Value: !GetAtt PrivateSubnet.Outputs.SubnetId1
+
+  PublicEc2SgId:
+    Description: "ID of the Application Load Balancer security group in the public subnet"
+    Value: !GetAtt PublicEc2Sg.Outputs.SecurityGroupId
+
+  PublicEc2SgName:
+    Description: "Name of the Application Load Balancer security group in the public subnet"
+    Value: !GetAtt PublicEc2Sg.Outputs.SecurityGroupName
+
+  PrivateEc2SgId:
+    Description: "ID of the private EC2 security group in the private subnet"
+    Value: !GetAtt PrivateEc2Sg.Outputs.SecurityGroupId
+
+  PrivateEc2SgName:
+    Description: "Name of the private EC2 security group in the private subnet"
+    Value: !GetAtt PrivateEc2Sg.Outputs.SecurityGroupName
+
+  PublicEc2Id:
+    Description: "ID of the EC2 instance launched in the public subnet"
+    Value: !GetAtt PublicEc2.Outputs.InstanceId
+
+  PrivateEc2Id:
+    Description: "ID of the EC2 instance launched in the private subnet"
+    Value: !GetAtt PrivateEc2.Outputs.InstanceId
+
+  QueueName:
+    Description: "Name of the SQS queue created by the nested SQS queue stack"
+    Value: !GetAtt SQSQueue.Outputs.QueueName
+
+  QueueArn:
+    Description: "ARN of the SQS queue created by the nested SQS queue stack"
+    Value: !GetAtt SQSQueue.Outputs.QueueArn
